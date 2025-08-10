@@ -22,29 +22,42 @@ void SystemInfo::updateStats() {
     readCpuStats();
     readMemoryStats();
     readLoadAverage();
+    readNetworkStats();
     readProcesses();
     applyProcessFilters();
     sortProcesses();
 }
 
 void SystemInfo::readCpuStats() {
-    std::ifstream file("/proc/stat");
-    std::string line;
-    
-    if (std::getline(file, line)) {
-        std::istringstream iss(line);
-        std::string cpu_label;
-        uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
+    try {
+        std::ifstream file("/proc/stat");
+        if (!file.is_open()) {
+            stats.cpu_percent = 0.0;
+            return;
+        }
         
-        iss >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
-        
-        uint64_t total_time = user + nice + system + idle + iowait + irq + softirq + steal;
-        uint64_t idle_time = idle + iowait;
-        
-        stats.cpu_percent = calculateCpuPercent(total_time, idle_time);
-        
-        prev_total_time = total_time;
-        prev_idle_time = idle_time;
+        std::string line;
+        if (std::getline(file, line)) {
+            std::istringstream iss(line);
+            std::string cpu_label;
+            uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
+            
+            if (iss >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal) {
+                uint64_t total_time = user + nice + system + idle + iowait + irq + softirq + steal;
+                uint64_t idle_time = idle + iowait;
+                
+                stats.cpu_percent = calculateCpuPercent(total_time, idle_time);
+                
+                prev_total_time = total_time;
+                prev_idle_time = idle_time;
+            } else {
+                stats.cpu_percent = 0.0;
+            }
+        } else {
+            stats.cpu_percent = 0.0;
+        }
+    } catch (const std::exception&) {
+        stats.cpu_percent = 0.0;
     }
 }
 
@@ -60,52 +73,77 @@ double SystemInfo::calculateCpuPercent(uint64_t total_time, uint64_t idle_time) 
 }
 
 void SystemInfo::readMemoryStats() {
-    std::ifstream file("/proc/meminfo");
-    std::string line;
-    
-    stats.total_memory_kb = 0;
-    stats.free_memory_kb = 0;
-    uint64_t available_kb = 0;
-    
-    while (std::getline(file, line)) {
-        std::istringstream iss(line);
-        std::string key;
-        uint64_t value;
-        
-        iss >> key >> value;
-        
-        if (key == "MemTotal:") {
-            stats.total_memory_kb = value;
-        } else if (key == "MemAvailable:") {
-            available_kb = value;
-        } else if (key == "MemFree:" && available_kb == 0) {
-            stats.free_memory_kb = value;
+    try {
+        std::ifstream file("/proc/meminfo");
+        if (!file.is_open()) {
+            stats.total_memory_kb = 0;
+            stats.used_memory_kb = 0;
+            stats.free_memory_kb = 0;
+            return;
         }
+        
+        std::string line;
+        stats.total_memory_kb = 0;
+        stats.free_memory_kb = 0;
+        uint64_t available_kb = 0;
+        
+        while (std::getline(file, line)) {
+            std::istringstream iss(line);
+            std::string key;
+            uint64_t value;
+            
+            if (iss >> key >> value) {
+                if (key == "MemTotal:") {
+                    stats.total_memory_kb = value;
+                } else if (key == "MemAvailable:") {
+                    available_kb = value;
+                } else if (key == "MemFree:" && available_kb == 0) {
+                    stats.free_memory_kb = value;
+                }
+            }
+        }
+        
+        if (available_kb > 0) {
+            stats.free_memory_kb = available_kb;
+        }
+        
+        if (stats.total_memory_kb > 0) {
+            stats.used_memory_kb = stats.total_memory_kb - stats.free_memory_kb;
+        } else {
+            stats.used_memory_kb = 0;
+        }
+    } catch (const std::exception&) {
+        stats.total_memory_kb = 0;
+        stats.used_memory_kb = 0;
+        stats.free_memory_kb = 0;
     }
-    
-    if (available_kb > 0) {
-        stats.free_memory_kb = available_kb;
-    }
-    
-    stats.used_memory_kb = stats.total_memory_kb - stats.free_memory_kb;
 }
 
 void SystemInfo::readLoadAverage() {
-    std::ifstream file("/proc/loadavg");
-    if (file.is_open()) {
-        file >> stats.load_avg[0] >> stats.load_avg[1] >> stats.load_avg[2];
+    try {
+        std::ifstream file("/proc/loadavg");
+        if (file.is_open()) {
+            if (!(file >> stats.load_avg[0] >> stats.load_avg[1] >> stats.load_avg[2])) {
+                stats.load_avg[0] = stats.load_avg[1] = stats.load_avg[2] = 0.0;
+            }
+        } else {
+            stats.load_avg[0] = stats.load_avg[1] = stats.load_avg[2] = 0.0;
+        }
+    } catch (const std::exception&) {
+        stats.load_avg[0] = stats.load_avg[1] = stats.load_avg[2] = 0.0;
     }
 }
 
 void SystemInfo::readProcesses() {
     stats.processes.clear();
+    stats.processes.reserve(config.max_processes + 50); // Резервируем память
     stats.process_count = 0;
     
     try {
         for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
             if (!entry.is_directory()) continue;
             
-            std::string filename = entry.path().filename().string();
+            const std::string& filename = entry.path().filename().string();
             if (!std::all_of(filename.begin(), filename.end(), ::isdigit)) continue;
             
             int pid = std::stoi(filename);
@@ -150,6 +188,11 @@ void SystemInfo::readProcesses() {
                     proc.is_kernel_thread = true;
                 }
                 
+                // Получаем CPU времена: utime (11), stime (12), starttime (19)
+                proc.utime = std::stoull(fields[11]);
+                proc.stime = std::stoull(fields[12]);
+                proc.start_time = std::stoull(fields[19]);
+                
                 // RSS находится в поле 21 (после имени и состояния)
                 uint64_t rss = std::stoull(fields[21]);
                 proc.memory_kb = rss * 4; // RSS в страницах по 4KB
@@ -172,13 +215,26 @@ void SystemInfo::readProcesses() {
             }
             
             proc.user = getUserName(proc.uid);
-            proc.cpu_percent = 0.0; // Упрощенная версия, без вычисления CPU
+            
+            // Вычисляем CPU процент если есть предыдущие данные
+            auto prev_it = prev_processes.find(proc.pid);
+            if (prev_it != prev_processes.end()) {
+                proc.cpu_percent = calculateProcessCpuPercent(proc, prev_it->second);
+            } else {
+                proc.cpu_percent = 0.0;
+            }
             
             stats.processes.push_back(proc);
             stats.process_count++;
         }
     } catch (const std::exception&) {
         // Игнорируем ошибки чтения процессов
+    }
+    
+    // Обновляем предыдущие данные о процессах
+    prev_processes.clear();
+    for (const auto& proc : stats.processes) {
+        prev_processes[proc.pid] = proc;
     }
 }
 
@@ -246,6 +302,73 @@ void SystemInfo::sortProcesses() {
                   
                   return config.reverse_sort ? !result : result;
               });
+}
+
+double SystemInfo::calculateProcessCpuPercent(const ProcessInfo& current, const ProcessInfo& previous) {
+    uint64_t total_time_diff = (current.utime + current.stime) - (previous.utime + previous.stime);
+    uint64_t system_time_diff = prev_total_time - 0; // Используем системное время между обновлениями
+    
+    if (system_time_diff == 0) return 0.0;
+    
+    // Получаем количество CPU ядер
+    static long cpu_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpu_cores <= 0) cpu_cores = 1;
+    
+    // Конвертируем в проценты
+    double cpu_percent = (100.0 * total_time_diff * cpu_cores) / system_time_diff;
+    
+    return std::min(cpu_percent, 100.0 * cpu_cores); // Ограничиваем максимумом
+}
+
+void SystemInfo::readNetworkStats() {
+    try {
+        stats.network_interfaces.clear();
+        
+        std::ifstream file("/proc/net/dev");
+        std::string line;
+        
+        if (!file.is_open()) return;
+        
+        // Пропускаем первые две строки (заголовки)
+        if (!std::getline(file, line) || !std::getline(file, line)) return;
+        
+        while (std::getline(file, line)) {
+            std::istringstream iss(line);
+            std::string interface;
+            
+            if (!(iss >> interface)) continue;
+            
+            // Убираем двоеточие из имени интерфейса
+            if (!interface.empty() && interface.back() == ':') {
+                interface.pop_back();
+            }
+            
+            // Пропускаем loopback интерфейсы и пустые имена
+            if (interface.empty() || interface == "lo") continue;
+            
+            NetworkStats net_stat;
+            net_stat.interface = interface;
+            
+            // Читаем статистики: rx_bytes, rx_packets, ..., tx_bytes, tx_packets, ...
+            uint64_t values[16] = {0};
+            int read_count = 0;
+            for (int i = 0; i < 16 && iss >> values[i]; ++i) {
+                read_count++;
+            }
+            
+            if (read_count >= 10) { // Нужно минимум 10 значений для tx_packets
+                net_stat.rx_bytes = values[0];
+                net_stat.rx_packets = values[1];
+                net_stat.tx_bytes = values[8];
+                net_stat.tx_packets = values[9];
+                
+                stats.network_interfaces.push_back(net_stat);
+            }
+        }
+    } catch (const std::exception&) {
+        // В случае ошибки очищаем список интерфейсов
+        stats.network_interfaces.clear();
+    }
 }
 
 std::string SystemInfo::getUserName(int uid) {

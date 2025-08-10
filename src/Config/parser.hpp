@@ -13,6 +13,7 @@ struct MtopConfig {
     bool show_load_avg = true;
     bool show_memory_bar = true;
     bool show_cpu_bar = true;
+    bool show_network_stats = true;
     
     // Process settings
     enum class SortBy {

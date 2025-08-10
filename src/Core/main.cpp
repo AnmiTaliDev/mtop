@@ -5,6 +5,8 @@
 #include <csignal>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/select.h>
+#include <fcntl.h>
 #include "system_info.hpp"
 #include "parser.hpp"
 
@@ -102,7 +104,25 @@ public:
         if (config.show_colors) std::cout << "\033[1;32m";
         std::cout << stats.process_count;
         if (config.show_colors) std::cout << "\033[0m";
-        std::cout << "\n\n";
+        std::cout << "\n";
+        
+        // Network statistics
+        if (config.show_network_stats && !stats.network_interfaces.empty()) {
+            if (config.show_colors) std::cout << "\033[1;33m"; // Желтый для заголовков
+            std::cout << "Network: ";
+            if (config.show_colors) std::cout << "\033[1;36m"; // Голубой для данных
+            
+            for (size_t i = 0; i < stats.network_interfaces.size(); ++i) {
+                const auto& net = stats.network_interfaces[i];
+                if (i > 0) std::cout << " | ";
+                std::cout << net.interface << " RX:" << formatBytes(net.rx_bytes) 
+                         << " TX:" << formatBytes(net.tx_bytes);
+            }
+            if (config.show_colors) std::cout << "\033[0m";
+            std::cout << "\n";
+        }
+        
+        std::cout << "\n";
     }
     
     void printProcesses(const SystemStats& stats) {
@@ -255,6 +275,41 @@ private:
     }
 };
 
+class KeyboardHandler {
+public:
+    KeyboardHandler() {
+        // Сохраняем оригинальные настройки терминала
+        tcgetattr(STDIN_FILENO, &orig_termios);
+        
+        // Устанавливаем неканонический режим
+        struct termios raw = orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        
+        // Делаем stdin неблокирующим
+        int flags = fcntl(STDIN_FILENO, F_GETFL);
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    }
+    
+    ~KeyboardHandler() {
+        // Восстанавливаем оригинальные настройки
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    }
+    
+    char getKey() {
+        char c = 0;
+        if (read(STDIN_FILENO, &c, 1) == 1) {
+            return c;
+        }
+        return 0;
+    }
+    
+private:
+    struct termios orig_termios;
+};
+
 volatile bool running = true;
 
 void signalHandler(int signal) {
@@ -281,34 +336,136 @@ int main(int argc, char* argv[]) {
     
     SystemInfo sysInfo(config);
     Display display(config);
+    KeyboardHandler keyboard;
     
     if (config.show_colors) {
-        std::cout << "\033[1;32mStarting mtop... Press Ctrl+C to exit\033[0m\n";
+        std::cout << "\033[1;32mStarting mtop... Press 'h' for help or 'q' to quit\033[0m\n";
     } else {
-        std::cout << "Starting mtop... Press Ctrl+C to exit\n";
+        std::cout << "Starting mtop... Press 'h' for help or 'q' to quit\n";
     }
     std::this_thread::sleep_for(std::chrono::seconds(1));
     
+    bool force_update = true;
+    auto last_update = std::chrono::steady_clock::now();
+    
     while (running) {
-        display.clear();
-        display.printHeader();
+        // Проверяем клавиши
+        char key = keyboard.getKey();
+        bool config_changed = false;
         
-        sysInfo.updateStats();
-        SystemStats stats = sysInfo.getStats();
-        
-        display.printSystemStats(stats);
-        display.printProcesses(stats);
-        
-        if (config.show_colors) {
-            std::cout << "\n\033[1;90mPress Ctrl+C to exit | Update interval: " 
-                      << config.update_interval << "s\033[0m" << std::flush;
-        } else {
-            std::cout << "\nPress Ctrl+C to exit | Update interval: " 
-                      << config.update_interval << "s" << std::flush;
+        if (key != 0) {
+            switch (key) {
+                case 'q':
+                case 'Q':
+                case 27: // ESC
+                    running = false;
+                    continue;
+                case 'm':
+                case 'M':
+                    config.sort_by = MtopConfig::SortBy::MEMORY;
+                    config_changed = true;
+                    break;
+                case 'c':
+                case 'C':
+                    config.sort_by = MtopConfig::SortBy::CPU;
+                    config_changed = true;
+                    break;
+                case 'p':
+                case 'P':
+                    config.sort_by = MtopConfig::SortBy::PID;
+                    config_changed = true;
+                    break;
+                case 'n':
+                case 'N':
+                    config.sort_by = MtopConfig::SortBy::NAME;
+                    config_changed = true;
+                    break;
+                case 'r':
+                case 'R':
+                    config.reverse_sort = !config.reverse_sort;
+                    config_changed = true;
+                    break;
+                case '+':
+                case '=':
+                    if (config.update_interval > 1) {
+                        config.update_interval--;
+                        config_changed = true;
+                    }
+                    break;
+                case '-':
+                case '_':
+                    if (config.update_interval < 10) {
+                        config.update_interval++;
+                        config_changed = true;
+                    }
+                    break;
+                case 't':
+                case 'T':
+                    config.show_network_stats = !config.show_network_stats;
+                    config_changed = true;
+                    break;
+                case 'h':
+                case 'H':
+                case '?':
+                    display.clear();
+                    display.printHeader();
+                    std::cout << "\nKeyboard Commands:\n";
+                    std::cout << "  q, Q, ESC  - Quit\n";
+                    std::cout << "  m, M       - Sort by Memory (default)\n";
+                    std::cout << "  c, C       - Sort by CPU\n";
+                    std::cout << "  p, P       - Sort by PID\n";
+                    std::cout << "  n, N       - Sort by Name\n";
+                    std::cout << "  r, R       - Reverse sort order\n";
+                    std::cout << "  t, T       - Toggle network statistics\n";
+                    std::cout << "  +, =       - Decrease update interval\n";
+                    std::cout << "  -, _       - Increase update interval\n";
+                    std::cout << "  h, H, ?    - Show this help\n\n";
+                    std::cout << "Press any key to continue...";
+                    std::cout.flush();
+                    
+                    // Ждем нажатия любой клавиши
+                    while (keyboard.getKey() == 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    }
+                    force_update = true;
+                    break;
+            }
         }
         
-        // Обновляем согласно интервалу из конфигурации
-        std::this_thread::sleep_for(std::chrono::seconds(config.update_interval));
+        if (config_changed) {
+            sysInfo.updateConfig(config);
+            display.updateConfig(config);
+            force_update = true;
+        }
+        
+        // Проверяем, пора ли обновлять экран
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_update);
+        
+        if (force_update || elapsed.count() >= config.update_interval) {
+            display.clear();
+            display.printHeader();
+            
+            sysInfo.updateStats();
+            SystemStats stats = sysInfo.getStats();
+            
+            display.printSystemStats(stats);
+            display.printProcesses(stats);
+            
+            if (config.show_colors) {
+                std::cout << "\n\033[1;90m[q]uit [m]emory [c]pu [p]id [n]ame [r]everse [+/-] delay [h]elp | Update: " 
+                          << config.update_interval << "s\033[0m" << std::flush;
+            } else {
+                std::cout << "\n[q]uit [m]emory [c]pu [p]id [n]ame [r]everse [+/-] delay [h]elp | Update: " 
+                          << config.update_interval << "s" << std::flush;
+            }
+            
+            last_update = now;
+            force_update = false;
+        }
+        
+        // Небольшая задержка чтобы не загружать CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
     if (config.show_colors) {

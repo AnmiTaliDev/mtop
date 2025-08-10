@@ -218,9 +218,14 @@ bool ConfigParser::parseLine(const std::string& line) {
     
     // Parse configuration values
     if (key == "update_interval") {
-        config.update_interval = parseInt(value);
+        int interval = parseInt(value);
+        config.update_interval = std::max(1, std::min(60, interval)); // 1-60 секунд
     } else if (key == "max_processes") {
-        config.max_processes = parseInt(value);
+        int max_proc = parseInt(value);
+        config.max_processes = std::max(5, std::min(200, max_proc)); // 5-200 процессов
+    } else if (key == "progress_bar_width") {
+        int width = parseInt(value);
+        config.progress_bar_width = std::max(10, std::min(100, width)); // 10-100 символов
     } else if (key == "show_colors") {
         config.show_colors = parseBool(value);
     } else if (key == "show_load_avg") {
@@ -229,8 +234,8 @@ bool ConfigParser::parseLine(const std::string& line) {
         config.show_memory_bar = parseBool(value);
     } else if (key == "show_cpu_bar") {
         config.show_cpu_bar = parseBool(value);
-    } else if (key == "progress_bar_width") {
-        config.progress_bar_width = parseInt(value);
+    } else if (key == "show_network_stats") {
+        config.show_network_stats = parseBool(value);
     } else if (key == "theme") {
         config.theme = value;
     } else if (key == "sort_by") {
@@ -291,7 +296,11 @@ bool ConfigParser::parseBool(const std::string& value) const {
 
 int ConfigParser::parseInt(const std::string& value) const {
     try {
-        return std::stoi(value);
+        int result = std::stoi(value);
+        // Валидация разумных пределов
+        if (result < 0) return 0;
+        if (result > 3600) return 3600; // Максимум 1 час
+        return result;
     } catch (const std::exception&) {
         return 0;
     }
