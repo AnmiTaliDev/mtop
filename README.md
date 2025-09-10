@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Meson](https://img.shields.io/badge/build-meson-orange.svg)](https://mesonbuild.com/)
 
-## Screenshot
+## Shellshot
 
 ```
 ╭─────────────────────────────────────────────────────────────────────────────╮
