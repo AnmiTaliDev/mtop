@@ -26,9 +26,9 @@
             ];
 
             meta = with pkgs.lib; {
-              description = "Minimalistic Modern Top - A beautiful system monitor for Linux";
+              description = "Terminal system monitor for Linux";
               homepage = "https://github.com/AnmiTaliDev/mtop";
-              license = licenses.asl20;
+              license = licenses.gpl3Only;
               platforms = platforms.linux;
               mainProgram = "mtop";
             };
