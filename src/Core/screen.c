@@ -4,18 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *const style_codes[STYLE_COUNT] = {
-    [STYLE_DEFAULT] = "0",
-    [STYLE_BORDER] = "0;90",
-    [STYLE_TITLE] = "0;1;36",
-    [STYLE_MUTED] = "0;90",
-    [STYLE_HEADER] = "0;1",
-    [STYLE_ACCENT] = "0;36",
-    [STYLE_LOW] = "0;32",
-    [STYLE_MEDIUM] = "0;33",
-    [STYLE_HIGH] = "0;31",
-};
-
 bool screenReset(Screen *screen, int width, int height)
 {
     if (width != screen->width || height != screen->height) {
@@ -125,7 +113,7 @@ void screenBox(Screen *screen, int x, int y, int width, int height, bool ascii)
     screenPut(screen, right, bottom, ascii ? "+" : "╯", STYLE_BORDER);
 }
 
-void screenFlush(const Screen *screen, bool colors)
+void screenFlush(const Screen *screen, const char *const *styles)
 {
     fputs("\033[H", stdout);
 
@@ -133,13 +121,13 @@ void screenFlush(const Screen *screen, bool colors)
         Style current = STYLE_COUNT;
         for (int x = 0; x < screen->width; x++) {
             const Cell *cell = &screen->cells[y * screen->width + x];
-            if (colors && cell->style != current) {
+            if (styles && cell->style != current) {
                 current = cell->style;
-                printf("\033[%sm", style_codes[current]);
+                printf("\033[%sm", styles[current]);
             }
             fputs(cell->glyph, stdout);
         }
-        if (colors) {
+        if (styles) {
             fputs("\033[0m", stdout);
         }
         if (y + 1 < screen->height) {

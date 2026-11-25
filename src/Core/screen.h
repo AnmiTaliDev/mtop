@@ -15,6 +15,7 @@ typedef enum {
     STYLE_LOW,
     STYLE_MEDIUM,
     STYLE_HIGH,
+    STYLE_SELECTED,
     STYLE_COUNT
 } Style;
 
@@ -36,6 +37,6 @@ int screenText(Screen *screen, int x, int y, int max_width, const char *text,
                Style style);
 void screenBox(Screen *screen, int x, int y, int width, int height,
                bool ascii);
-void screenFlush(const Screen *screen, bool colors);
+void screenFlush(const Screen *screen, const char *const *styles);
 
 #endif

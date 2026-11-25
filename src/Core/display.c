@@ -7,6 +7,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include "theme.h"
+
 #define MIN_WIDTH 60
 #define MIN_HEIGHT 16
 #define DEFAULT_WIDTH 80
@@ -15,7 +17,8 @@
 #define SUMMARY_HEIGHT 8
 #define NETWORK_HEIGHT 3
 #define MEMORY_WIDTH 30
-#define HELP_WIDTH 44
+#define HELP_WIDTH 48
+#define CONFIRM_WIDTH 52
 
 #define OUTPUT_BUFFER_SIZE (1 << 16)
 #define TEXT_SIZE 256
@@ -241,38 +244,52 @@ static Style stateStyle(char state)
 }
 
 static void drawProcess(Screen *screen, const MtopConfig *config,
-                        const ProcessInfo *process, int y)
+                        const ProcessInfo *process, int y, bool selected)
 {
+    if (selected) {
+        for (int column = 1; column < screen->width - 1; column++) {
+            screenPut(screen, column, y, " ", STYLE_SELECTED);
+        }
+        screenPut(screen, 1, y, ">", STYLE_SELECTED);
+    }
+
     int x = 2;
-    drawText(screen, x, y, 7, STYLE_MUTED, "%7d", process->pid);
+    drawText(screen, x, y, 7, selected ? STYLE_SELECTED : STYLE_MUTED, "%7d",
+             process->pid);
     x += 8;
 
     if (config->show_process_user) {
-        screenText(screen, x, y, USER_WIDTH, process->user, STYLE_ACCENT);
+        screenText(screen, x, y, USER_WIDTH, process->user,
+                   selected ? STYLE_SELECTED : STYLE_ACCENT);
     }
     x += USER_WIDTH + 1;
 
     if (config->show_process_state) {
         char state[2] = {process->state, '\0'};
-        screenText(screen, x, y, 1, state, stateStyle(process->state));
+        screenText(screen, x, y, 1, state,
+                   selected ? STYLE_SELECTED : stateStyle(process->state));
     }
     x += 2;
 
-    drawText(screen, x, y, 6, usageStyle(process->cpu_percent / 100.0),
+    drawText(screen, x, y, 6,
+             selected ? STYLE_SELECTED
+                      : usageStyle(process->cpu_percent / 100.0),
              "%6.1f", process->cpu_percent);
     x += 7;
 
     char memory[BYTES_SIZE];
     formatBytes((double)process->memory_kb * 1024.0, memory, sizeof(memory));
-    drawText(screen, x, y, 8, STYLE_DEFAULT, "%8s", memory);
+    drawText(screen, x, y, 8, selected ? STYLE_SELECTED : STYLE_DEFAULT, "%8s",
+             memory);
     x += 10;
 
     screenText(screen, x, y, screen->width - x - 2, process->name,
-               STYLE_HEADER);
+               selected ? STYLE_SELECTED : STYLE_HEADER);
 }
 
 static void drawProcessPanel(Screen *screen, const MtopConfig *config,
-                             const SystemStats *stats, int y, int height)
+                             const SystemStats *stats, View *view, int y,
+                             int height)
 {
     static const char *const sort_names[] = {
         [SORT_MEMORY] = "memory",
@@ -283,7 +300,12 @@ static void drawProcessPanel(Screen *screen, const MtopConfig *config,
 
     char title[TEXT_SIZE];
     char detail[TEXT_SIZE];
-    snprintf(title, sizeof(title), "processes %d", stats->process_count);
+    if (view->query[0]) {
+        snprintf(title, sizeof(title), "processes %zu/%d", view->count,
+                 stats->process_count);
+    } else {
+        snprintf(title, sizeof(title), "processes %d", stats->process_count);
+    }
     snprintf(detail, sizeof(detail), "sort: %s%s",
              sort_names[config->sort_by],
              config->reverse_sort ? " reversed" : "");
@@ -294,54 +316,98 @@ static void drawProcessPanel(Screen *screen, const MtopConfig *config,
              "CPU%", "MEM", "NAME");
 
     size_t rows = (size_t)(height - 3);
-    if (rows > (size_t)config->max_processes) {
-        rows = (size_t)config->max_processes;
-    }
-    for (size_t i = 0; i < rows && i < stats->listed_count; i++) {
-        drawProcess(screen, config, &stats->processes[i], y + 2 + (int)i);
+    viewScroll(view, rows);
+    for (size_t row = 0; row < rows; row++) {
+        size_t position = view->offset + row;
+        const ProcessInfo *process = viewProcess(view, stats, position);
+        if (!process) {
+            break;
+        }
+        drawProcess(screen, config, process, y + 2 + (int)row,
+                    position == view->cursor);
     }
 }
 
-static void drawFooter(Screen *screen, const MtopConfig *config)
+static void drawFooter(Screen *screen, const MtopConfig *config,
+                       const View *view)
 {
     int y = screen->height - 1;
-    drawText(screen, 1, y, screen->width - 6, STYLE_MUTED,
-             "q quit  m/c/p/n sort  r rev  t net  +/- delay  h help");
+    int width = screen->width - 6;
+
+    if (view->mode == MODE_SEARCH) {
+        drawText(screen, 1, y, width, STYLE_HEADER,
+                 "find: %s_  (Enter keep, Esc clear)", view->query);
+    } else if (view->message[0]) {
+        screenText(screen, 1, y, width, view->message, STYLE_HEADER);
+    } else if (view->query[0]) {
+        drawText(screen, 1, y, width, STYLE_HEADER,
+                 "find: %s  (/ edit, Esc clear)", view->query);
+    } else {
+        screenText(screen, 1, y, width,
+                   "q quit  / find  k term  m/c/p/n sort  r rev  h help",
+                   STYLE_MUTED);
+    }
     drawText(screen, screen->width - 4, y, 4, STYLE_HEADER, "%2ds",
              config->update_interval);
+}
+
+static void drawDialog(Screen *screen, const MtopConfig *config,
+                       const char *title, int width,
+                       const char *const *lines, int count)
+{
+    int height = count + 2;
+    int x = (screen->width - width) / 2;
+    int y = (screen->height - height) / 2;
+
+    for (int row = y; row < y + height; row++) {
+        for (int column = x; column < x + width; column++) {
+            screenPut(screen, column, row, " ", STYLE_DEFAULT);
+        }
+    }
+    drawPanel(screen, config, x, y, width, height, title, "");
+    for (int i = 0; i < count; i++) {
+        screenText(screen, x + 3, y + 1 + i, width - 6, lines[i],
+                   STYLE_DEFAULT);
+    }
 }
 
 static void drawHelp(Screen *screen, const MtopConfig *config)
 {
     static const char *const lines[] = {
-        "q, Esc   quit",
-        "m        sort by memory",
-        "c        sort by CPU usage",
-        "p        sort by PID",
-        "n        sort by name",
-        "r        reverse sort order",
-        "t        toggle network panel",
-        "+, =     decrease update interval",
-        "-, _     increase update interval",
-        "h, ?     show this help",
+        "q            quit",
+        "Up, Down     move selection",
+        "PgUp, PgDn   move one page",
+        "Home, End    first or last process",
+        "/            find by name",
+        "Esc          clear search, or quit",
+        "k            send SIGTERM to selection",
+        "m c p n      sort: memory, cpu, pid, name",
+        "r            reverse sort order",
+        "t            toggle network panel",
+        "+ -          shorter or longer interval",
         "",
         "Press any key to close",
     };
-    int count = (int)(sizeof(lines) / sizeof(lines[0]));
-    int height = count + 2;
-    int x = (screen->width - HELP_WIDTH) / 2;
-    int y = (screen->height - height) / 2;
 
-    for (int row = y; row < y + height; row++) {
-        for (int column = x; column < x + HELP_WIDTH; column++) {
-            screenPut(screen, column, row, " ", STYLE_DEFAULT);
-        }
-    }
-    drawPanel(screen, config, x, y, HELP_WIDTH, height, "help", "");
-    for (int i = 0; i < count; i++) {
-        screenText(screen, x + 3, y + 1 + i, HELP_WIDTH - 6, lines[i],
-                   STYLE_DEFAULT);
-    }
+    drawDialog(screen, config, "help", HELP_WIDTH, lines,
+               (int)(sizeof(lines) / sizeof(lines[0])));
+}
+
+static void drawConfirm(Screen *screen, const MtopConfig *config,
+                        const Target *target)
+{
+    char question[TEXT_SIZE];
+    snprintf(question, sizeof(question), "Send SIGTERM to PID %d?",
+             target->pid);
+    const char *const lines[] = {
+        question,
+        target->name,
+        "",
+        "y confirm, any other key cancels",
+    };
+
+    drawDialog(screen, config, "terminate", CONFIRM_WIDTH, lines,
+               (int)(sizeof(lines) / sizeof(lines[0])));
 }
 
 static void readTerminalSize(int *width, int *height)
@@ -375,9 +441,11 @@ void displayEnd(Display *display)
 }
 
 bool displayDraw(Display *display, const MtopConfig *config,
-                 const SystemStats *stats, bool show_help)
+                 const SystemStats *stats, View *view)
 {
     Screen *screen = &display->screen;
+    const char *const *styles =
+        config->show_colors ? themeStyles(config->theme) : NULL;
     int width, height;
     readTerminalSize(&width, &height);
     if (width != screen->width || height != screen->height) {
@@ -391,7 +459,7 @@ bool displayDraw(Display *display, const MtopConfig *config,
         screenText(screen, 0, 0, width, "Terminal too small", STYLE_HEADER);
         drawText(screen, 0, 1, width, STYLE_MUTED, "Need %dx%d", MIN_WIDTH,
                  MIN_HEIGHT);
-        screenFlush(screen, config->show_colors);
+        screenFlush(screen, styles);
         return true;
     }
 
@@ -403,13 +471,15 @@ bool displayDraw(Display *display, const MtopConfig *config,
         drawNetworkPanel(screen, config, stats, y);
         y += NETWORK_HEIGHT;
     }
-    drawProcessPanel(screen, config, stats, y, height - y - 1);
-    drawFooter(screen, config);
+    drawProcessPanel(screen, config, stats, view, y, height - y - 1);
+    drawFooter(screen, config, view);
 
-    if (show_help) {
+    if (view->mode == MODE_HELP) {
         drawHelp(screen, config);
+    } else if (view->mode == MODE_CONFIRM) {
+        drawConfirm(screen, config, &view->target);
     }
-    screenFlush(screen, config->show_colors);
+    screenFlush(screen, styles);
 
     return true;
 }

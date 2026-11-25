@@ -6,6 +6,7 @@
 #include "parser.h"
 #include "screen.h"
 #include "system_info.h"
+#include "view.h"
 
 typedef struct {
     Screen screen;
@@ -14,6 +15,6 @@ typedef struct {
 void displayBegin(Display *display);
 void displayEnd(Display *display);
 bool displayDraw(Display *display, const MtopConfig *config,
-                 const SystemStats *stats, bool show_help);
+                 const SystemStats *stats, View *view);
 
 #endif

@@ -15,8 +15,6 @@
 
 #define MIN_UPDATE_INTERVAL 1
 #define MAX_UPDATE_INTERVAL 60
-#define MIN_PROCESSES 5
-#define MAX_PROCESSES 200
 
 static char *trim(char *str)
 {
@@ -116,15 +114,33 @@ static SortBy parseSortBy(const char *value)
     return SORT_MEMORY;
 }
 
+static bool parseTheme(const char *value, ThemeId *theme)
+{
+    static const char *const names[THEME_COUNT] = {
+        [THEME_DEFAULT] = "default",
+        [THEME_OCEAN] = "ocean",
+        [THEME_AMBER] = "amber",
+        [THEME_MONO] = "mono",
+    };
+
+    for (int i = 0; i < THEME_COUNT; i++) {
+        if (strcasecmp(value, names[i]) == 0) {
+            *theme = (ThemeId)i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool parseEntry(MtopConfig *config, const char *key, char *value)
 {
     if (strcmp(key, "update_interval") == 0) {
         return parseClampedInt(value, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL,
                                &config->update_interval);
     }
-    if (strcmp(key, "max_processes") == 0) {
-        return parseClampedInt(value, MIN_PROCESSES, MAX_PROCESSES,
-                               &config->max_processes);
+    if (strcmp(key, "theme") == 0) {
+        return parseTheme(value, &config->theme);
     }
     if (strcmp(key, "hide_processes") == 0) {
         return stringListParse(&config->hide_processes, value);
@@ -153,7 +169,7 @@ static bool parseEntry(MtopConfig *config, const char *key, char *value)
         config->show_process_user = parseBool(value);
     } else if (strcmp(key, "show_kernel_threads") == 0) {
         config->show_kernel_threads = parseBool(value);
-    } else if (strcmp(key, "theme") != 0 &&
+    } else if (strcmp(key, "max_processes") != 0 &&
                strcmp(key, "progress_bar_width") != 0) {
         return false;
     }
@@ -181,7 +197,6 @@ void configInit(MtopConfig *config)
 {
     *config = (MtopConfig){
         .update_interval = 2,
-        .max_processes = 20,
         .show_colors = true,
         .show_load_avg = true,
         .show_memory_bar = true,
@@ -270,7 +285,7 @@ static void printHelp(void)
          "  -h, --help              Show this help message\n"
          "  -c, --config FILE       Use specified configuration file\n"
          "  -d, --delay SECONDS     Update interval in seconds (1-60)\n"
-         "  -n, --max-processes N   Maximum number of processes to show (5-200)\n"
+         "  -n, --max-processes N   Ignored, the process list scrolls\n"
          "  --no-color              Disable colored output\n"
          "  --sort-memory           Sort processes by memory usage (default)\n"
          "  --sort-cpu              Sort processes by CPU usage\n"
@@ -316,12 +331,11 @@ ArgsResult configParseArgs(MtopConfig *config, int argc, char *argv[])
                 return ARGS_ERROR;
             }
         } else if (matches(arg, "-n", "--max-processes")) {
-            if (i + 1 >= argc ||
-                !parseClampedInt(argv[++i], MIN_PROCESSES, MAX_PROCESSES,
-                                 &config->max_processes)) {
+            if (i + 1 >= argc) {
                 fprintf(stderr, "Error: %s requires a number\n", arg);
                 return ARGS_ERROR;
             }
+            i++;
         } else if (strcmp(arg, "--no-color") == 0) {
             config->show_colors = false;
         } else if (strcmp(arg, "--sort-memory") == 0) {

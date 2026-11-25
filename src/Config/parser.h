@@ -11,6 +11,14 @@ typedef enum {
     SORT_NAME
 } SortBy;
 
+typedef enum {
+    THEME_DEFAULT,
+    THEME_OCEAN,
+    THEME_AMBER,
+    THEME_MONO,
+    THEME_COUNT
+} ThemeId;
+
 typedef struct {
     char **items;
     size_t count;
@@ -18,12 +26,12 @@ typedef struct {
 
 typedef struct {
     int update_interval;
-    int max_processes;
     bool show_colors;
     bool show_load_avg;
     bool show_memory_bar;
     bool show_cpu_bar;
     bool show_network_stats;
+    ThemeId theme;
 
     SortBy sort_by;
     bool reverse_sort;

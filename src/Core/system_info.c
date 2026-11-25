@@ -475,3 +475,14 @@ void systemInfoSort(SystemStats *stats, const MtopConfig *config)
         stats->processes[j] = swap;
     }
 }
+
+bool systemInfoStartTime(int pid, uint64_t *start_time)
+{
+    ProcessInfo process;
+    if (!readProcessStat(pid, &process)) {
+        return false;
+    }
+    *start_time = process.start_time;
+
+    return true;
+}

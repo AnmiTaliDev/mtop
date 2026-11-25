@@ -4,21 +4,14 @@
 #include <time.h>
 
 #include "display.h"
+#include "input.h"
 #include "parser.h"
 #include "system_info.h"
 #include "terminal.h"
+#include "view.h"
 
 #define KEY_TIMEOUT_MS 100
-#define MAX_KEY_INTERVAL 10
 #define FIRST_UPDATE_SECONDS 1
-
-typedef enum {
-    ACTION_NONE,
-    ACTION_REDRAW,
-    ACTION_SORT,
-    ACTION_HELP,
-    ACTION_QUIT
-} Action;
 
 static volatile sig_atomic_t running = 1;
 static volatile sig_atomic_t resized = 0;
@@ -45,62 +38,6 @@ static void installSignalHandlers(void)
     sigaction(SIGWINCH, &action, NULL);
 }
 
-static Action setSortOrder(MtopConfig *config, SortBy sort_by)
-{
-    config->sort_by = sort_by;
-    return ACTION_SORT;
-}
-
-static Action handleKey(MtopConfig *config, int key)
-{
-    switch (key) {
-    case 'q':
-    case 'Q':
-    case KEY_ESCAPE:
-        return ACTION_QUIT;
-    case 'm':
-    case 'M':
-        return setSortOrder(config, SORT_MEMORY);
-    case 'c':
-    case 'C':
-        return setSortOrder(config, SORT_CPU);
-    case 'p':
-    case 'P':
-        return setSortOrder(config, SORT_PID);
-    case 'n':
-    case 'N':
-        return setSortOrder(config, SORT_NAME);
-    case 'r':
-    case 'R':
-        config->reverse_sort = !config->reverse_sort;
-        return ACTION_SORT;
-    case 't':
-    case 'T':
-        config->show_network_stats = !config->show_network_stats;
-        return ACTION_REDRAW;
-    case '+':
-    case '=':
-        if (config->update_interval <= 1) {
-            return ACTION_NONE;
-        }
-        config->update_interval--;
-        return ACTION_REDRAW;
-    case '-':
-    case '_':
-        if (config->update_interval >= MAX_KEY_INTERVAL) {
-            return ACTION_NONE;
-        }
-        config->update_interval++;
-        return ACTION_REDRAW;
-    case 'h':
-    case 'H':
-    case '?':
-        return ACTION_HELP;
-    default:
-        return ACTION_NONE;
-    }
-}
-
 static double secondsSince(const struct timespec *start)
 {
     struct timespec now;
@@ -111,11 +48,11 @@ static double secondsSince(const struct timespec *start)
 }
 
 static bool runMonitor(MtopConfig *config, Terminal *terminal,
-                       Display *display, SystemInfo *info, SystemStats *stats)
+                       Display *display, SystemInfo *info, SystemStats *stats,
+                       View *view)
 {
     bool redraw = true;
-    bool show_help = false;
-    int interval = FIRST_UPDATE_SECONDS;
+    bool first_sample = true;
     struct timespec last_sample;
     clock_gettime(CLOCK_MONOTONIC, &last_sample);
 
@@ -124,16 +61,20 @@ static bool runMonitor(MtopConfig *config, Terminal *terminal,
             resized = 0;
             redraw = true;
         }
+
+        int interval = first_sample ? FIRST_UPDATE_SECONDS
+                                    : config->update_interval;
         if (secondsSince(&last_sample) >= interval) {
             clock_gettime(CLOCK_MONOTONIC, &last_sample);
-            if (!systemInfoSample(info, stats, config)) {
+            if (!systemInfoSample(info, stats, config) ||
+                !viewRefresh(view, stats)) {
                 return false;
             }
-            interval = config->update_interval;
+            first_sample = false;
             redraw = true;
         }
         if (redraw) {
-            if (!displayDraw(display, config, stats, show_help)) {
+            if (!displayDraw(display, config, stats, view)) {
                 return false;
             }
             redraw = false;
@@ -143,26 +84,15 @@ static bool runMonitor(MtopConfig *config, Terminal *terminal,
         if (key == KEY_NONE) {
             continue;
         }
-        if (show_help) {
-            show_help = false;
-            redraw = true;
-            continue;
-        }
 
-        Action action = handleKey(config, key);
-        if (action == ACTION_QUIT) {
+        InputResult result = inputHandle(key, config, stats, view);
+        if (result == INPUT_QUIT) {
             break;
         }
-        if (action == ACTION_SORT) {
-            systemInfoSort(stats, config);
+        if (result == INPUT_FAILED) {
+            return false;
         }
-        if (action == ACTION_HELP) {
-            show_help = true;
-        }
-        if (action == ACTION_REDRAW && interval != FIRST_UPDATE_SECONDS) {
-            interval = config->update_interval;
-        }
-        redraw = action != ACTION_NONE;
+        redraw = result == INPUT_REDRAW;
     }
 
     return true;
@@ -185,7 +115,10 @@ int main(int argc, char *argv[])
     SystemInfo info;
     SystemStats stats;
     systemInfoInit(&info, &stats);
-    bool success = systemInfoSample(&info, &stats, &config);
+    View view;
+    viewInit(&view);
+    bool success = systemInfoSample(&info, &stats, &config) &&
+                   viewRefresh(&view, &stats);
 
     if (success) {
         Terminal terminal;
@@ -193,7 +126,8 @@ int main(int argc, char *argv[])
         Display display;
         displayBegin(&display);
 
-        success = runMonitor(&config, &terminal, &display, &info, &stats);
+        success = runMonitor(&config, &terminal, &display, &info, &stats,
+                             &view);
 
         displayEnd(&display);
         terminalRestore(&terminal);
@@ -203,6 +137,7 @@ int main(int argc, char *argv[])
         fputs("Error: out of memory\n", stderr);
     }
 
+    viewFree(&view);
     systemInfoFree(&info, &stats);
     configFree(&config);
 

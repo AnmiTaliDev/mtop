@@ -68,5 +68,6 @@ void systemInfoFree(SystemInfo *info, SystemStats *stats);
 bool systemInfoSample(SystemInfo *info, SystemStats *stats,
                       const MtopConfig *config);
 void systemInfoSort(SystemStats *stats, const MtopConfig *config);
+bool systemInfoStartTime(int pid, uint64_t *start_time);
 
 #endif

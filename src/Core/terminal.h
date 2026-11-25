@@ -5,8 +5,14 @@
 #include <termios.h>
 
 #define KEY_NONE 0
-#define KEY_SEQUENCE (-1)
 #define KEY_ESCAPE 27
+#define KEY_SEQUENCE (-1)
+#define KEY_UP (-2)
+#define KEY_DOWN (-3)
+#define KEY_PAGE_UP (-4)
+#define KEY_PAGE_DOWN (-5)
+#define KEY_HOME (-6)
+#define KEY_END (-7)
 
 typedef struct {
     struct termios original;

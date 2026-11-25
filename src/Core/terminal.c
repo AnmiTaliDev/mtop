@@ -1,15 +1,66 @@
 #include "terminal.h"
 
 #include <poll.h>
+#include <string.h>
 #include <unistd.h>
 
 #define ESCAPE_TIMEOUT_MS 50
+#define SEQUENCE_SIZE 16
 
 static bool waitForInput(int timeout_ms)
 {
     struct pollfd input = {.fd = STDIN_FILENO, .events = POLLIN};
 
     return poll(&input, 1, timeout_ms) > 0;
+}
+
+static bool readByte(unsigned char *byte, int timeout_ms)
+{
+    return waitForInput(timeout_ms) && read(STDIN_FILENO, byte, 1) == 1;
+}
+
+static int decodeSequence(const char *sequence)
+{
+    static const struct {
+        const char *sequence;
+        int key;
+    } keys[] = {
+        {"A", KEY_UP},         {"B", KEY_DOWN},       {"H", KEY_HOME},
+        {"F", KEY_END},        {"1~", KEY_HOME},      {"4~", KEY_END},
+        {"5~", KEY_PAGE_UP},   {"6~", KEY_PAGE_DOWN}, {"7~", KEY_HOME},
+        {"8~", KEY_END},
+    };
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (strcmp(sequence, keys[i].sequence) == 0) {
+            return keys[i].key;
+        }
+    }
+
+    return KEY_SEQUENCE;
+}
+
+static int readEscape(void)
+{
+    unsigned char byte;
+    if (!readByte(&byte, ESCAPE_TIMEOUT_MS)) {
+        return KEY_ESCAPE;
+    }
+    if (byte != '[' && byte != 'O') {
+        return KEY_SEQUENCE;
+    }
+
+    char sequence[SEQUENCE_SIZE] = "";
+    size_t length = 0;
+    while (length + 1 < sizeof(sequence) &&
+           readByte(&byte, ESCAPE_TIMEOUT_MS)) {
+        sequence[length++] = (char)byte;
+        if (byte >= 0x40 && byte <= 0x7E) {
+            break;
+        }
+    }
+
+    return decodeSequence(sequence);
 }
 
 void terminalInit(Terminal *terminal)
@@ -50,12 +101,5 @@ int terminalReadKey(Terminal *terminal, int timeout_ms)
         return KEY_NONE;
     }
 
-    if (key == KEY_ESCAPE && waitForInput(ESCAPE_TIMEOUT_MS)) {
-        unsigned char rest[32];
-        if (read(STDIN_FILENO, rest, sizeof(rest)) > 0) {
-            return KEY_SEQUENCE;
-        }
-    }
-
-    return key;
+    return key == KEY_ESCAPE ? readEscape() : key;
 }
