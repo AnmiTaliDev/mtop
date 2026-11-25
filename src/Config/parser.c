@@ -17,8 +17,6 @@
 #define MAX_UPDATE_INTERVAL 60
 #define MIN_PROCESSES 5
 #define MAX_PROCESSES 200
-#define MIN_BAR_WIDTH 10
-#define MAX_BAR_WIDTH 100
 
 static char *trim(char *str)
 {
@@ -128,10 +126,6 @@ static bool parseEntry(MtopConfig *config, const char *key, char *value)
         return parseClampedInt(value, MIN_PROCESSES, MAX_PROCESSES,
                                &config->max_processes);
     }
-    if (strcmp(key, "progress_bar_width") == 0) {
-        return parseClampedInt(value, MIN_BAR_WIDTH, MAX_BAR_WIDTH,
-                               &config->progress_bar_width);
-    }
     if (strcmp(key, "hide_processes") == 0) {
         return stringListParse(&config->hide_processes, value);
     }
@@ -159,7 +153,8 @@ static bool parseEntry(MtopConfig *config, const char *key, char *value)
         config->show_process_user = parseBool(value);
     } else if (strcmp(key, "show_kernel_threads") == 0) {
         config->show_kernel_threads = parseBool(value);
-    } else if (strcmp(key, "theme") != 0) {
+    } else if (strcmp(key, "theme") != 0 &&
+               strcmp(key, "progress_bar_width") != 0) {
         return false;
     }
 
@@ -193,7 +188,6 @@ void configInit(MtopConfig *config)
         .show_cpu_bar = true,
         .show_network_stats = true,
         .sort_by = SORT_MEMORY,
-        .progress_bar_width = 30,
         .show_process_state = true,
         .show_process_user = true,
     };

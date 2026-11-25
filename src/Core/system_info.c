@@ -73,6 +73,8 @@ static void readMemoryStats(SystemStats *stats)
 {
     stats->total_memory_kb = 0;
     stats->used_memory_kb = 0;
+    stats->total_swap_kb = 0;
+    stats->used_swap_kb = 0;
 
     FILE *file = fopen("/proc/meminfo", "r");
     if (!file) {
@@ -81,12 +83,19 @@ static void readMemoryStats(SystemStats *stats)
 
     uint64_t free_kb = 0;
     uint64_t available_kb = 0;
+    uint64_t free_swap_kb = 0;
     char line[256];
     while (fgets(line, sizeof(line), file)) {
         if (sscanf(line, "MemTotal: %" SCNu64, &stats->total_memory_kb) == 1) {
             continue;
         }
         if (sscanf(line, "MemFree: %" SCNu64, &free_kb) == 1) {
+            continue;
+        }
+        if (sscanf(line, "SwapTotal: %" SCNu64, &stats->total_swap_kb) == 1) {
+            continue;
+        }
+        if (sscanf(line, "SwapFree: %" SCNu64, &free_swap_kb) == 1) {
             continue;
         }
         sscanf(line, "MemAvailable: %" SCNu64, &available_kb);
@@ -96,6 +105,9 @@ static void readMemoryStats(SystemStats *stats)
     uint64_t unused_kb = available_kb ? available_kb : free_kb;
     if (stats->total_memory_kb >= unused_kb) {
         stats->used_memory_kb = stats->total_memory_kb - unused_kb;
+    }
+    if (stats->total_swap_kb >= free_swap_kb) {
+        stats->used_swap_kb = stats->total_swap_kb - free_swap_kb;
     }
 }
 
@@ -113,62 +125,6 @@ static void readLoadAverage(SystemStats *stats)
         stats->load_avg[0] = stats->load_avg[1] = stats->load_avg[2] = 0.0;
     }
     fclose(file);
-}
-
-static bool parseInterfaceLine(char *line, NetworkStats *interface)
-{
-    char *separator = strchr(line, ':');
-    if (!separator) {
-        return false;
-    }
-    *separator = '\0';
-
-    const char *name = line;
-    while (isspace((unsigned char)*name)) {
-        name++;
-    }
-    if (*name == '\0' || strcmp(name, "lo") == 0) {
-        return false;
-    }
-    snprintf(interface->name, sizeof(interface->name), "%s", name);
-
-    return sscanf(separator + 1,
-                  "%" SCNu64 " %*u %*u %*u %*u %*u %*u %*u %" SCNu64,
-                  &interface->rx_bytes, &interface->tx_bytes) == 2;
-}
-
-static bool readNetworkStats(SystemStats *stats)
-{
-    stats->interface_count = 0;
-
-    FILE *file = fopen("/proc/net/dev", "r");
-    if (!file) {
-        return true;
-    }
-
-    bool success = true;
-    char line[512];
-    while (fgets(line, sizeof(line), file)) {
-        NetworkStats interface;
-        if (!parseInterfaceLine(line, &interface)) {
-            continue;
-        }
-
-        if (stats->interface_count == stats->interface_capacity) {
-            NetworkStats *interfaces = growArray(stats->interfaces,
-                                                 &stats->interface_capacity,
-                                                 sizeof(*interfaces));
-            if (!interfaces) {
-                success = false;
-                break;
-            }
-            stats->interfaces = interfaces;
-        }
-        stats->interfaces[stats->interface_count++] = interface;
-    }
-    fclose(file);
-
-    return success;
 }
 
 static bool readProcessStat(int pid, ProcessInfo *process)
@@ -300,7 +256,7 @@ static int parsePid(const char *name)
 
 static bool readProcesses(const SystemInfo *info, SystemStats *stats)
 {
-    stats->shown_count = 0;
+    stats->listed_count = 0;
     stats->process_count = 0;
 
     DIR *directory = opendir("/proc");
@@ -325,7 +281,7 @@ static bool readProcesses(const SystemInfo *info, SystemStats *stats)
         readUserName(&process);
         process.cpu_percent = processCpuPercent(info, &process, cpu_count);
 
-        if (stats->shown_count == stats->process_capacity) {
+        if (stats->listed_count == stats->process_capacity) {
             ProcessInfo *processes = growArray(stats->processes,
                                                &stats->process_capacity,
                                                sizeof(*processes));
@@ -335,11 +291,11 @@ static bool readProcesses(const SystemInfo *info, SystemStats *stats)
             }
             stats->processes = processes;
         }
-        stats->processes[stats->shown_count++] = process;
+        stats->processes[stats->listed_count++] = process;
     }
     closedir(directory);
 
-    stats->process_count = (int)stats->shown_count;
+    stats->process_count = (int)stats->listed_count;
 
     return success;
 }
@@ -347,25 +303,25 @@ static bool readProcesses(const SystemInfo *info, SystemStats *stats)
 static bool saveSamples(SystemInfo *info, const SystemStats *stats)
 {
     info->sample_count = 0;
-    if (stats->shown_count == 0) {
+    if (stats->listed_count == 0) {
         return true;
     }
 
     ProcessSample *samples = realloc(info->samples,
-                                     stats->shown_count * sizeof(*samples));
+                                     stats->listed_count * sizeof(*samples));
     if (!samples) {
         return false;
     }
     info->samples = samples;
 
-    for (size_t i = 0; i < stats->shown_count; i++) {
+    for (size_t i = 0; i < stats->listed_count; i++) {
         samples[i] = (ProcessSample){
             .pid = stats->processes[i].pid,
             .start_time = stats->processes[i].start_time,
             .cpu_time = stats->processes[i].cpu_time,
         };
     }
-    info->sample_count = stats->shown_count;
+    info->sample_count = stats->listed_count;
     qsort(samples, info->sample_count, sizeof(*samples), compareSamples);
 
     return true;
@@ -402,12 +358,12 @@ static bool shouldShowProcess(const ProcessInfo *process,
 static void filterProcesses(SystemStats *stats, const MtopConfig *config)
 {
     size_t kept = 0;
-    for (size_t i = 0; i < stats->shown_count; i++) {
+    for (size_t i = 0; i < stats->listed_count; i++) {
         if (shouldShowProcess(&stats->processes[i], config)) {
             stats->processes[kept++] = stats->processes[i];
         }
     }
-    stats->shown_count = kept;
+    stats->listed_count = kept;
 }
 
 static int compareByPid(const void *left, const void *right)
@@ -447,9 +403,48 @@ static int compareByName(const void *left, const void *right)
     return result ? result : compareByPid(left, right);
 }
 
-static void sortProcesses(SystemStats *stats, const MtopConfig *config)
+void systemInfoInit(SystemInfo *info, SystemStats *stats)
 {
-    if (stats->shown_count == 0) {
+    *info = (SystemInfo){0};
+    *stats = (SystemStats){0};
+}
+
+void systemInfoFree(SystemInfo *info, SystemStats *stats)
+{
+    free(info->samples);
+    free(stats->processes);
+    systemInfoInit(info, stats);
+}
+
+bool systemInfoSample(SystemInfo *info, SystemStats *stats,
+                      const MtopConfig *config)
+{
+    readCpuStats(info, stats);
+    readMemoryStats(stats);
+    readLoadAverage(stats);
+    networkUpdate(&info->network_sample, &stats->network);
+
+    if (info->total_time_delta > 0) {
+        historyPush(&stats->cpu_history, stats->cpu_percent);
+    }
+    if (stats->network.has_rate) {
+        historyPush(&stats->rx_history, stats->network.rx_rate);
+        historyPush(&stats->tx_history, stats->network.tx_rate);
+    }
+
+    if (!readProcesses(info, stats) || !saveSamples(info, stats)) {
+        return false;
+    }
+
+    filterProcesses(stats, config);
+    systemInfoSort(stats, config);
+
+    return true;
+}
+
+void systemInfoSort(SystemStats *stats, const MtopConfig *config)
+{
+    if (stats->listed_count == 0) {
         return;
     }
 
@@ -468,50 +463,15 @@ static void sortProcesses(SystemStats *stats, const MtopConfig *config)
         compare = compareByName;
         break;
     }
-    qsort(stats->processes, stats->shown_count, sizeof(*stats->processes),
+    qsort(stats->processes, stats->listed_count, sizeof(*stats->processes),
           compare);
 
     if (!config->reverse_sort) {
         return;
     }
-    for (size_t i = 0, j = stats->shown_count - 1; i < j; i++, j--) {
+    for (size_t i = 0, j = stats->listed_count - 1; i < j; i++, j--) {
         ProcessInfo swap = stats->processes[i];
         stats->processes[i] = stats->processes[j];
         stats->processes[j] = swap;
     }
-}
-
-void systemInfoInit(SystemInfo *info, SystemStats *stats)
-{
-    *info = (SystemInfo){0};
-    *stats = (SystemStats){0};
-}
-
-void systemInfoFree(SystemInfo *info, SystemStats *stats)
-{
-    free(info->samples);
-    free(stats->processes);
-    free(stats->interfaces);
-    systemInfoInit(info, stats);
-}
-
-bool systemInfoUpdate(SystemInfo *info, SystemStats *stats,
-                      const MtopConfig *config)
-{
-    readCpuStats(info, stats);
-    readMemoryStats(stats);
-    readLoadAverage(stats);
-
-    if (!readNetworkStats(stats) || !readProcesses(info, stats) ||
-        !saveSamples(info, stats)) {
-        return false;
-    }
-
-    filterProcesses(stats, config);
-    sortProcesses(stats, config);
-    if (stats->shown_count > (size_t)config->max_processes) {
-        stats->shown_count = (size_t)config->max_processes;
-    }
-
-    return true;
 }

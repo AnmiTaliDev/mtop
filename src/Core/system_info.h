@@ -1,12 +1,13 @@
 #ifndef SYSTEM_INFO_H
 #define SYSTEM_INFO_H
 
-#include <net/if.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "history.h"
+#include "network.h"
 #include "parser.h"
 
 #define PROCESS_NAME_SIZE 64
@@ -26,25 +27,23 @@ typedef struct {
 } ProcessInfo;
 
 typedef struct {
-    char name[IF_NAMESIZE];
-    uint64_t rx_bytes;
-    uint64_t tx_bytes;
-} NetworkStats;
-
-typedef struct {
     double cpu_percent;
     uint64_t total_memory_kb;
     uint64_t used_memory_kb;
+    uint64_t total_swap_kb;
+    uint64_t used_swap_kb;
     double load_avg[3];
     int process_count;
 
     ProcessInfo *processes;
-    size_t shown_count;
+    size_t listed_count;
     size_t process_capacity;
 
-    NetworkStats *interfaces;
-    size_t interface_count;
-    size_t interface_capacity;
+    NetworkStats network;
+
+    History cpu_history;
+    History rx_history;
+    History tx_history;
 } SystemStats;
 
 typedef struct {
@@ -60,11 +59,14 @@ typedef struct {
 
     ProcessSample *samples;
     size_t sample_count;
+
+    NetworkSample network_sample;
 } SystemInfo;
 
 void systemInfoInit(SystemInfo *info, SystemStats *stats);
 void systemInfoFree(SystemInfo *info, SystemStats *stats);
-bool systemInfoUpdate(SystemInfo *info, SystemStats *stats,
+bool systemInfoSample(SystemInfo *info, SystemStats *stats,
                       const MtopConfig *config);
+void systemInfoSort(SystemStats *stats, const MtopConfig *config);
 
 #endif

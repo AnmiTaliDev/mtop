@@ -28,7 +28,6 @@ typedef struct {
     SortBy sort_by;
     bool reverse_sort;
 
-    int progress_bar_width;
     bool show_process_state;
     bool show_process_user;
 

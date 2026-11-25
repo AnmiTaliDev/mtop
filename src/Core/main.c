@@ -10,20 +10,29 @@
 
 #define KEY_TIMEOUT_MS 100
 #define MAX_KEY_INTERVAL 10
+#define FIRST_UPDATE_SECONDS 1
 
 typedef enum {
     ACTION_NONE,
     ACTION_REDRAW,
+    ACTION_SORT,
     ACTION_HELP,
     ACTION_QUIT
 } Action;
 
 static volatile sig_atomic_t running = 1;
+static volatile sig_atomic_t resized = 0;
 
 static void handleSignal(int signal_number)
 {
     (void)signal_number;
     running = 0;
+}
+
+static void handleResize(int signal_number)
+{
+    (void)signal_number;
+    resized = 1;
 }
 
 static void installSignalHandlers(void)
@@ -32,12 +41,14 @@ static void installSignalHandlers(void)
     sigemptyset(&action.sa_mask);
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGTERM, &action, NULL);
+    action.sa_handler = handleResize;
+    sigaction(SIGWINCH, &action, NULL);
 }
 
 static Action setSortOrder(MtopConfig *config, SortBy sort_by)
 {
     config->sort_by = sort_by;
-    return ACTION_REDRAW;
+    return ACTION_SORT;
 }
 
 static Action handleKey(MtopConfig *config, int key)
@@ -62,7 +73,7 @@ static Action handleKey(MtopConfig *config, int key)
     case 'r':
     case 'R':
         config->reverse_sort = !config->reverse_sort;
-        return ACTION_REDRAW;
+        return ACTION_SORT;
     case 't':
     case 'T':
         config->show_network_stats = !config->show_network_stats;
@@ -99,42 +110,59 @@ static double secondsSince(const struct timespec *start)
            (double)(now.tv_nsec - start->tv_nsec) / 1e9;
 }
 
-static void showHelp(const MtopConfig *config, Terminal *terminal)
-{
-    displayHelp(config);
-    while (running && terminalReadKey(terminal, KEY_TIMEOUT_MS) == KEY_NONE) {
-    }
-}
-
 static bool runMonitor(MtopConfig *config, Terminal *terminal,
-                       SystemInfo *info, SystemStats *stats)
+                       Display *display, SystemInfo *info, SystemStats *stats)
 {
     bool redraw = true;
-    struct timespec last_update = {0};
+    bool show_help = false;
+    int interval = FIRST_UPDATE_SECONDS;
+    struct timespec last_sample;
+    clock_gettime(CLOCK_MONOTONIC, &last_sample);
 
     while (running) {
-        Action action = handleKey(config,
-                                  terminalReadKey(terminal, KEY_TIMEOUT_MS));
+        if (resized) {
+            resized = 0;
+            redraw = true;
+        }
+        if (secondsSince(&last_sample) >= interval) {
+            clock_gettime(CLOCK_MONOTONIC, &last_sample);
+            if (!systemInfoSample(info, stats, config)) {
+                return false;
+            }
+            interval = config->update_interval;
+            redraw = true;
+        }
+        if (redraw) {
+            if (!displayDraw(display, config, stats, show_help)) {
+                return false;
+            }
+            redraw = false;
+        }
+
+        int key = terminalReadKey(terminal, KEY_TIMEOUT_MS);
+        if (key == KEY_NONE) {
+            continue;
+        }
+        if (show_help) {
+            show_help = false;
+            redraw = true;
+            continue;
+        }
+
+        Action action = handleKey(config, key);
         if (action == ACTION_QUIT) {
             break;
         }
+        if (action == ACTION_SORT) {
+            systemInfoSort(stats, config);
+        }
         if (action == ACTION_HELP) {
-            showHelp(config, terminal);
+            show_help = true;
         }
-        if (action != ACTION_NONE) {
-            redraw = true;
+        if (action == ACTION_REDRAW && interval != FIRST_UPDATE_SECONDS) {
+            interval = config->update_interval;
         }
-
-        if (running &&
-            (redraw ||
-             secondsSince(&last_update) >= config->update_interval)) {
-            clock_gettime(CLOCK_MONOTONIC, &last_update);
-            if (!systemInfoUpdate(info, stats, config)) {
-                return false;
-            }
-            displayFrame(config, stats);
-            redraw = false;
-        }
+        redraw = action != ACTION_NONE;
     }
 
     return true;
@@ -157,20 +185,17 @@ int main(int argc, char *argv[])
     SystemInfo info;
     SystemStats stats;
     systemInfoInit(&info, &stats);
-    bool success = systemInfoUpdate(&info, &stats, &config);
+    bool success = systemInfoSample(&info, &stats, &config);
 
     if (success) {
         Terminal terminal;
         terminalInit(&terminal);
-        displayBegin(&config);
-        displayStartMessage(&config);
+        Display display;
+        displayBegin(&display);
 
-        const struct timespec start_delay = {.tv_sec = 1};
-        nanosleep(&start_delay, NULL);
+        success = runMonitor(&config, &terminal, &display, &info, &stats);
 
-        success = runMonitor(&config, &terminal, &info, &stats);
-
-        displayEnd(&config);
+        displayEnd(&display);
         terminalRestore(&terminal);
     }
 

@@ -1,13 +1,19 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
+#include <stdbool.h>
+
 #include "parser.h"
+#include "screen.h"
 #include "system_info.h"
 
-void displayBegin(const MtopConfig *config);
-void displayEnd(const MtopConfig *config);
-void displayStartMessage(const MtopConfig *config);
-void displayFrame(const MtopConfig *config, const SystemStats *stats);
-void displayHelp(const MtopConfig *config);
+typedef struct {
+    Screen screen;
+} Display;
+
+void displayBegin(Display *display);
+void displayEnd(Display *display);
+bool displayDraw(Display *display, const MtopConfig *config,
+                 const SystemStats *stats, bool show_help);
 
 #endif
