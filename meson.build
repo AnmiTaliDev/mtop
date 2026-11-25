@@ -1,24 +1,23 @@
-project('mtop', 'cpp',
+project('mtop', 'c',
   version : '1.0.0',
   default_options : [
     'warning_level=3',
-    'cpp_std=c++17'
+    'c_std=c17'
   ]
 )
 
-# Минимальные зависимости - только стандартные системные библиотеки
-thread_dep = dependency('threads')
+add_project_arguments('-D_POSIX_C_SOURCE=200809L', language : 'c')
 
-# Include directories
 inc_dirs = include_directories('src/Core', 'src/Config')
 
 executable('mtop',
   sources : [
-    'src/Core/main.cpp',
-    'src/Core/system_info.cpp',
-    'src/Config/parser.cpp'
+    'src/Core/main.c',
+    'src/Core/system_info.c',
+    'src/Core/display.c',
+    'src/Core/terminal.c',
+    'src/Config/parser.c'
   ],
   include_directories : inc_dirs,
-  dependencies : [thread_dep],
   install : true
 )
